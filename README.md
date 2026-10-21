@@ -6,14 +6,23 @@ A minimal, realistic Python web service designed to showcase automated CI/CD sec
 
 ## 🎯 Architecture & Intentional Flaws
 
-The project contains a lightweight FastAPI backend (`app.py`) featuring 3 realistic, high-severity security flaws for demonstration purposes:
+The project contains a lightweight FastAPI backend (`app.py`) featuring 8 realistic security flaws spanning multiple OWASP & CWE categories for demonstration:
 
-1. **SQL Injection (`/search`)**: Concatenates raw user input into an SQLite query string without parameterization.
+1. **Hardcoded Secrets (CWE-798)**: Static JWT secret and admin API tokens declared directly in code.
+2. **SQL Injection (`/search`, CWE-89)**: Concatenates raw user input into an SQLite query string.
    - *Example Attack*: `GET /search?username=' OR '1'='1`
-2. **Path Traversal (`/download`)**: Opens files from a user-supplied filename without canonical directory resolution.
+3. **Path Traversal (`/download`, CWE-22)**: Opens files from user-supplied filename without canonical directory resolution.
    - *Example Attack*: `GET /download?filename=../app.py`
-3. **OS Command Injection (`/status`)**: Passes unvalidated IP/hostname parameters directly into `os.system(...)`.
+4. **OS Command Injection (`/status`, CWE-78)**: Passes unvalidated IP/host parameter into `os.system(...)`.
    - *Example Attack*: `GET /status?ip=127.0.0.1; whoami`
+5. **Server-Side Request Forgery (`/webhook/trigger`, CWE-918)**: Fetches arbitrary user-controlled URLs with `urllib.request`.
+   - *Example Attack*: `GET /webhook/trigger?target_url=http://169.254.169.254/latest/meta-data/`
+6. **Insecure Deserialization (`/session/restore`, CWE-502)**: Deserializes untrusted user data with `pickle.loads()`.
+   - *Example Attack*: `POST /session/restore?payload=<base64_rce_payload>`
+7. **Arbitrary Code Execution (`/tools/calc`, CWE-95)**: Executes dynamic Python expressions using `eval()`.
+   - *Example Attack*: `GET /tools/calc?expr=__import__('os').system('whoami')`
+8. **Reflected Cross-Site Scripting (`/welcome`, CWE-79)**: Returns unescaped user parameter directly inside HTML response.
+   - *Example Attack*: `GET /welcome?name=<script>alert('XSS')</script>`
 
 ---
 

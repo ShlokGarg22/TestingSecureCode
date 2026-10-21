@@ -1,15 +1,22 @@
+import base64
 import os
-from pathlib import Path
+import pickle
 import sqlite3
-import subprocess
+import urllib.request
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
 app = FastAPI(
     title="CustomerPortal",
-    description="A minimal customer portal application demonstrating automated CI/CD security scanning.",
-    version="1.0.0"
+    description="A customer portal application demonstrating automated CI/CD security scanning across diverse vulnerability types.",
+    version="1.1.0"
 )
+
+# ---------------------------------------------------------------------
+# Vulnerability Type 1: Hardcoded Secrets & Credentials (CWE-798)
+# ---------------------------------------------------------------------
+JWT_SECRET_KEY = "supersecret_jwt_signing_key_998877"
+ADMIN_API_TOKEN = "ghp_9876543210abcdefghijklmnopqrstuvwxyz"
 
 DB_PATH = "portal.db"
 REPORTS_DIR = "reports"
@@ -56,22 +63,29 @@ def index():
     return {
         "message": "Welcome to CustomerPortal API",
         "docs": "/docs",
-        "endpoints": ["/search", "/download", "/status"]
+        "endpoints": [
+            "/search",
+            "/download",
+            "/status",
+            "/webhook/trigger",
+            "/session/restore",
+            "/tools/calc",
+            "/welcome",
+        ]
     }
 
 
 # ---------------------------------------------------------------------
-# Endpoint 1: User Search
-# REMEDIATED: Parameterized SQL query prevents SQL Injection
+# Vulnerability Type 2: SQL Injection (CWE-89)
 # ---------------------------------------------------------------------
 @app.get("/search")
 def search_users(username: str = Query(..., description="Username to search")):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # SECURE: Parameterized query ensures untrusted input cannot alter SQL syntax
-    query = "SELECT id, username, email, role FROM users WHERE username = ?"
-    cursor.execute(query, (username,))
+    # VULNERABLE: Direct string interpolation into raw SQL statement
+    query = f"SELECT id, username, email, role FROM users WHERE username = '{username}'"
+    cursor.execute(query)
     rows = cursor.fetchall()
     conn.close()
 
@@ -79,44 +93,99 @@ def search_users(username: str = Query(..., description="Username to search")):
 
 
 # ---------------------------------------------------------------------
-# Endpoint 2: Report Download
-# REMEDIATED: Canonical path resolution prevents Path Traversal
+# Vulnerability Type 3: Path Traversal (CWE-22)
 # ---------------------------------------------------------------------
 @app.get("/download", response_class=PlainTextResponse)
 def download_report(filename: str = Query(..., description="Report filename to download")):
-    # SECURE: Validate that the resolved canonical path remains inside REPORTS_DIR
-    base_dir = Path(REPORTS_DIR).resolve()
-    target_path = (base_dir / filename).resolve()
+    # VULNERABLE: Direct path joining allows directory traversal (e.g., ../app.py)
+    file_path = os.path.join(REPORTS_DIR, filename)
 
-    if base_dir not in target_path.parents and target_path != base_dir:
-        raise HTTPException(status_code=403, detail="Directory traversal detected")
-
-    if not target_path.exists() or not target_path.is_file():
+    if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Report file not found")
 
-    with open(target_path, "r", encoding="utf-8") as f:
+    with open(file_path, "r", encoding="utf-8") as f:
         return f.read()
 
 
 # ---------------------------------------------------------------------
-# Endpoint 3: Diagnostic Status Ping
-# REMEDIATED: Subprocess execution without shell prevents Command Injection
+# Vulnerability Type 4: OS Command Injection (CWE-78)
 # ---------------------------------------------------------------------
 @app.get("/status")
 def diagnostic_status(ip: str = Query(..., description="IP or hostname to ping")):
-    # SECURE: Execute ping as an argument vector without shell interpretation
-    result = subprocess.run(
-        ["ping", "-c", "1", ip],
-        capture_output=True,
-        text=True,
-        shell=False
-    )
+    # VULNERABLE: Unsanitized user parameter passed directly to shell execution
+    cmd = f"ping -c 1 {ip}"
+    exit_code = os.system(cmd)
 
     return {
         "host": ip,
-        "exit_code": result.returncode,
-        "reachable": result.returncode == 0
+        "exit_code": exit_code,
+        "reachable": exit_code == 0
     }
+
+
+# ---------------------------------------------------------------------
+# Vulnerability Type 5: Server-Side Request Forgery / SSRF (CWE-918)
+# ---------------------------------------------------------------------
+@app.get("/webhook/trigger")
+def trigger_webhook(target_url: str = Query(..., description="External callback URL")):
+    """Fetch external webhook URL directly without domain/IP validation."""
+    # VULNERABLE: Untrusted user-supplied URL passed directly to HTTP client
+    try:
+        req = urllib.request.Request(target_url, headers={"User-Agent": "CustomerPortal-Webhook"})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            preview = response.read(200).decode("utf-8", errors="ignore")
+        return {"status": "success", "target_url": target_url, "preview": preview}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Webhook request failed: {str(exc)}")
+
+
+# ---------------------------------------------------------------------
+# Vulnerability Type 6: Insecure Deserialization (CWE-502)
+# ---------------------------------------------------------------------
+@app.post("/session/restore")
+def restore_session(payload: str = Query(..., description="Base64-encoded pickled session data")):
+    """Restore customer session state from client-supplied serialized object."""
+    # VULNERABLE: Insecure deserialization via pickle.loads on untrusted data
+    try:
+        raw_bytes = base64.b64decode(payload)
+        session_obj = pickle.loads(raw_bytes)
+        return {"status": "session restored", "session_type": str(type(session_obj))}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Deserialization error: {str(exc)}")
+
+
+# ---------------------------------------------------------------------
+# Vulnerability Type 7: Arbitrary Code Execution / Eval Injection (CWE-95)
+# ---------------------------------------------------------------------
+@app.get("/tools/calc")
+def dynamic_calculator(expr: str = Query(..., description="Mathematical calculation formula")):
+    """Evaluate mathematical expressions entered by user."""
+    # VULNERABLE: Passing untrusted string directly to Python eval()
+    try:
+        computed = eval(expr)
+        return {"expression": expr, "result": computed}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Calculation error: {str(exc)}")
+
+
+# ---------------------------------------------------------------------
+# Vulnerability Type 8: Reflected Cross-Site Scripting / XSS (CWE-79)
+# ---------------------------------------------------------------------
+@app.get("/welcome", response_class=HTMLResponse)
+def welcome_user(name: str = Query(..., description="User display name")):
+    """Render welcome banner."""
+    # VULNERABLE: Direct string interpolation into raw HTML response without escaping
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+      <head><title>Welcome</title></head>
+      <body>
+        <h1>Welcome back, {name}!</h1>
+        <p>Your CustomerPortal session is active.</p>
+      </body>
+    </html>
+    """
+    return html_content
 
 
 if __name__ == "__main__":
