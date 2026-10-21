@@ -1,0 +1,53 @@
+name: SecureCode CI/CD Security Scan
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  security-scan:
+    name: SecureCode Scan & Remediation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run SecureCode Security Analysis
+        id: securecode
+        uses: ShlokGarg22/SecureCode@main
+        with:
+          fail-on: "high"
+          enable-ai: "true"
+
+      - name: Upload SARIF Report to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: results.sarif
+
+      - name: Archive Remediation Patch
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remediation-patch
+          path: remediation.patch
+          if-no-files-found: ignore
+          retention-days: 7
