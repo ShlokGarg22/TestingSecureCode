@@ -1,5 +1,7 @@
 import os
+from pathlib import Path
 import sqlite3
+import subprocess
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
@@ -60,16 +62,16 @@ def index():
 
 # ---------------------------------------------------------------------
 # Endpoint 1: User Search
-# FLAW: SQL Injection (concatenating user input directly into SQLite query)
+# REMEDIATED: Parameterized SQL query prevents SQL Injection
 # ---------------------------------------------------------------------
 @app.get("/search")
 def search_users(username: str = Query(..., description="Username to search")):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # VULNERABLE: Direct string interpolation into raw SQL statement
-    query = f"SELECT id, username, email, role FROM users WHERE username = '{username}'"
-    cursor.execute(query)
+    # SECURE: Parameterized query ensures untrusted input cannot alter SQL syntax
+    query = "SELECT id, username, email, role FROM users WHERE username = ?"
+    cursor.execute(query, (username,))
     rows = cursor.fetchall()
     conn.close()
 
@@ -78,34 +80,42 @@ def search_users(username: str = Query(..., description="Username to search")):
 
 # ---------------------------------------------------------------------
 # Endpoint 2: Report Download
-# FLAW: Path Traversal (opening file from user path without canonical validation)
+# REMEDIATED: Canonical path resolution prevents Path Traversal
 # ---------------------------------------------------------------------
 @app.get("/download", response_class=PlainTextResponse)
 def download_report(filename: str = Query(..., description="Report filename to download")):
-    # VULNERABLE: Direct path joining allows directory traversal (e.g., ../app.py)
-    file_path = os.path.join(REPORTS_DIR, filename)
+    # SECURE: Validate that the resolved canonical path remains inside REPORTS_DIR
+    base_dir = Path(REPORTS_DIR).resolve()
+    target_path = (base_dir / filename).resolve()
 
-    if not os.path.exists(file_path):
+    if base_dir not in target_path.parents and target_path != base_dir:
+        raise HTTPException(status_code=403, detail="Directory traversal detected")
+
+    if not target_path.exists() or not target_path.is_file():
         raise HTTPException(status_code=404, detail="Report file not found")
 
-    with open(file_path, "r", encoding="utf-8") as f:
+    with open(target_path, "r", encoding="utf-8") as f:
         return f.read()
 
 
 # ---------------------------------------------------------------------
 # Endpoint 3: Diagnostic Status Ping
-# FLAW: OS Command Injection (passing user-controlled input directly to os.system)
+# REMEDIATED: Subprocess execution without shell prevents Command Injection
 # ---------------------------------------------------------------------
 @app.get("/status")
 def diagnostic_status(ip: str = Query(..., description="IP or hostname to ping")):
-    # VULNERABLE: Unsanitized user parameter passed directly to shell execution
-    cmd = f"ping -c 1 {ip}"
-    exit_code = os.system(cmd)
+    # SECURE: Execute ping as an argument vector without shell interpretation
+    result = subprocess.run(
+        ["ping", "-c", "1", ip],
+        capture_output=True,
+        text=True,
+        shell=False
+    )
 
     return {
         "host": ip,
-        "exit_code": exit_code,
-        "reachable": exit_code == 0
+        "exit_code": result.returncode,
+        "reachable": result.returncode == 0
     }
 
 
